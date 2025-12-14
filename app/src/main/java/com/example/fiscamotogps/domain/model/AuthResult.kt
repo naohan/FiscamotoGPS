@@ -4,7 +4,8 @@ data class AuthResult(
     val token: String,
     val refreshToken: String?,
     val userName: String,
-    val rawUserData: String
+    val rawUserData: String,
+    val userId: String? = null
 )
 
 

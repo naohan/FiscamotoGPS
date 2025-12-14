@@ -23,6 +23,7 @@ class AuthDataStore(private val context: Context) {
         val USER_DATA = stringPreferencesKey("user_data")
         val USERNAME = stringPreferencesKey("username")
         val PASSWORD = stringPreferencesKey("password")
+        val USER_ID = stringPreferencesKey("user_id")
     }
 
     private val dataStore = context.authPreferencesDataStore
@@ -35,7 +36,8 @@ class AuthDataStore(private val context: Context) {
             userName = preferences[Keys.USER_NAME].orEmpty(),
             rawUserData = preferences[Keys.USER_DATA].orEmpty(),
             username = preferences[Keys.USERNAME].orEmpty(),
-            password = preferences[Keys.PASSWORD]
+            password = preferences[Keys.PASSWORD],
+            userId = preferences[Keys.USER_ID]
         )
     }
 
@@ -47,6 +49,7 @@ class AuthDataStore(private val context: Context) {
             preferences[Keys.USER_DATA] = session.rawUserData
             preferences[Keys.USERNAME] = session.username
             session.password?.let { preferences[Keys.PASSWORD] = it }
+            session.userId?.let { preferences[Keys.USER_ID] = it }
         }
     }
 
@@ -58,6 +61,7 @@ class AuthDataStore(private val context: Context) {
             preferences.remove(Keys.USER_DATA)
             preferences.remove(Keys.USERNAME)
             preferences.remove(Keys.PASSWORD)
+            preferences.remove(Keys.USER_ID)
         }
     }
 }

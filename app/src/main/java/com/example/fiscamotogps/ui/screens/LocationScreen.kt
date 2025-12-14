@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Canvas
+import androidx.compose.runtime.LaunchedEffect
 import com.example.fiscamotogps.location.hasLocationPermission
 import com.example.fiscamotogps.ui.state.LocationUiState
 
@@ -41,7 +42,8 @@ fun LocationScreen(
     onPermissionDenied: () -> Unit,
     onStartContinuousSending: () -> Unit,
     onStopContinuousSending: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onConnectSocket: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -73,6 +75,11 @@ fun LocationScreen(
         }
     }
     
+    // Conectar Socket.IO automáticamente al cargar la pantalla
+    LaunchedEffect(Unit) {
+        onConnectSocket()
+    }
+
     // Solicitar permisos automáticamente al cargar la pantalla si no están otorgados
     androidx.compose.runtime.LaunchedEffect(Unit) {
         if (!hasLocationPermission(context)) {
@@ -96,6 +103,53 @@ fun LocationScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Estado de Conexión Socket.IO
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = when {
+                    locationState.isSocketConnected -> MaterialTheme.colorScheme.primaryContainer
+                    else -> MaterialTheme.colorScheme.surfaceVariant
+                }
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val (socketColor, socketText) = when {
+                        locationState.isSocketConnected -> Color(0xFF4CAF50) to "🟢 Conectado al Servidor (Socket.IO)"
+                        locationState.socketConnectionState is com.example.fiscamotogps.socket.SocketConnectionState.Connecting ->
+                            Color(0xFF2196F3) to "🔵 Conectando al servidor..."
+                        locationState.socketConnectionState is com.example.fiscamotogps.socket.SocketConnectionState.Error ->
+                            Color(0xFFF44336) to "🔴 Error de conexión"
+                        else -> Color(0xFF9E9E9E) to "⚪ Desconectado del servidor"
+                    }
+
+                    Canvas(
+                        modifier = Modifier.size(12.dp)
+                    ) {
+                        drawCircle(color = socketColor, radius = size.minDimension / 2f)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = socketText,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                if (locationState.socketConnectionState is com.example.fiscamotogps.socket.SocketConnectionState.Error) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Error: ${(locationState.socketConnectionState as com.example.fiscamotogps.socket.SocketConnectionState.Error).message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         // Estado de Tracking GPS
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -112,11 +166,11 @@ fun LocationScreen(
                     val (trackColor, trackText) = when {
                         locationState.isSendingContinuously -> Color(0xFF4CAF50) to "🟢 Enviando GPS al Servidor"
                         locationState.isTracking -> Color(0xFF2196F3) to "🔵 GPS Activo"
-                        !locationState.hasLocationPermission -> 
+                        !locationState.hasLocationPermission ->
                             Color(0xFFFF9800) to "⚠️ Esperando Permiso GPS"
                         else -> Color(0xFF9E9E9E) to "⚪ GPS Inactivo"
                     }
-                    
+
                     Canvas(
                         modifier = Modifier.size(12.dp)
                     ) {
@@ -129,18 +183,18 @@ fun LocationScreen(
                         fontWeight = FontWeight.Medium
                     )
                 }
-                
+
                 if (locationState.isSendingContinuously) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Enviando ubicación al servidor cada 15 segundos",
+                        text = "Enviando ubicación por Socket.IO cada 15 segundos",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onTertiaryContainer
                     )
                 } else if (locationState.isTracking) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Obteniendo ubicación periódicamente",
+                        text = "GPS activo y listo para enviar",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )

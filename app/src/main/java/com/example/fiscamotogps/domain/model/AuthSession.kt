@@ -6,7 +6,8 @@ data class AuthSession(
     val userName: String,
     val rawUserData: String,
     val username: String,
-    val password: String? = null
+    val password: String? = null,
+    val userId: String? = null
 )
 
 

@@ -1,6 +1,7 @@
 package com.example.fiscamotogps.ui.viewmodel
 
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -9,6 +10,8 @@ import com.example.fiscamotogps.data.remote.LocationRepository
 import com.example.fiscamotogps.location.LocationClient
 import com.example.fiscamotogps.location.LocationWatchId
 import com.example.fiscamotogps.location.hasLocationPermission
+import com.example.fiscamotogps.socket.SocketService
+import com.example.fiscamotogps.socket.SocketConnectionState
 import com.example.fiscamotogps.ui.state.LocationUiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -33,19 +36,57 @@ class LocationViewModel(
     private var continuousSendingJob: Job? = null
     private var isSendingContinuously = false
 
+    // Socket.IO service
+    private val socketService = SocketService("https://backfiscamotov2.onrender.com").apply {
+        Log.d("LocationViewModel", "🏗️ [CREACIÓN] SocketService creado con URL: https://backfiscamotov2.onrender.com")
+    }
+
+    // Variable para almacenar el userId dinámico
+    private var currentUserId: String? = null
+
     init {
         // Verificar permisos iniciales
         _uiState.value = _uiState.value.copy(
             hasLocationPermission = hasLocationPermission(context)
         )
+
+        // Observar la sesión para obtener el userId dinámicamente
+        viewModelScope.launch {
+            authDataStore.authSessionFlow.collect { session ->
+                currentUserId = session?.userId
+                Log.d("LocationViewModel", "👤 [USER ID] Actualizado userId: $currentUserId")
+            }
+        }
+
+        // Observar estado de conexión Socket.IO
+        viewModelScope.launch {
+            socketService.connectionState.collect { connectionState ->
+                _uiState.value = _uiState.value.copy(
+                    socketConnectionState = connectionState,
+                    isSocketConnected = connectionState is SocketConnectionState.Connected
+                )
+            }
+        }
+
+        // Observar estado de tracking
+        viewModelScope.launch {
+            socketService.trackingActive.collect { trackingActive ->
+                _uiState.value = _uiState.value.copy(
+                    isTrackingActive = trackingActive
+                )
+            }
+        }
     }
 
     fun connectSocket() {
-        // Socket.IO removido - solo se usa el backend
+        Log.d("LocationViewModel", "🚀 [LLAMADA] connectSocket() llamado")
+        Log.d("LocationViewModel", "✅ [LLAMADA] Llamando a socketService.connect() - sin userId necesario")
+        socketService.connect()
     }
 
     fun disconnectSocket() {
         stopContinuousSending()
+        socketService.disconnect()
     }
 
     fun fetchLocation() {
@@ -60,11 +101,24 @@ class LocationViewModel(
                         accuracy = location.accuracy,
                         isFetching = false,
                         errorMessage = null,
-                        hasLocationPermission = true
+                        hasLocationPermission = true,
+                        isTracking = true
                     )
-                    
-                    // Enviar ubicación al backend
-                    sendLocationToBackend(location.latitude, location.longitude, location.accuracy)
+
+                    // Enviar ubicación por Socket.IO solo si tenemos userId
+                    currentUserId?.let { uid ->
+                        socketService.sendLocation(
+                            userId = uid,
+                            latitude = location.latitude,
+                            longitude = location.longitude,
+                            accuracy = location.accuracy
+                        )
+                    } ?: run {
+                        Log.w("LocationViewModel", "⚠️ No hay userId disponible, no se envía ubicación")
+                        _uiState.value = _uiState.value.copy(
+                            errorMessage = "No se puede enviar ubicación: userId no disponible"
+                        )
+                    }
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isFetching = false,
@@ -84,7 +138,7 @@ class LocationViewModel(
 
     fun startContinuousSending() {
         if (isSendingContinuously) return
-        
+
         if (!hasLocationPermission(context)) {
             _uiState.value = _uiState.value.copy(
                 errorMessage = "Se requiere permiso de ubicación para enviar datos"
@@ -92,12 +146,26 @@ class LocationViewModel(
             return
         }
 
+        // Verificar que tengamos userId
+        if (currentUserId == null) {
+            _uiState.value = _uiState.value.copy(
+                errorMessage = "No se puede iniciar envío: userId no disponible. Por favor, reinicia la sesión."
+            )
+            Log.e("LocationViewModel", "❌ No hay userId disponible para iniciar envío continuo")
+            return
+        }
+
         isSendingContinuously = true
         _uiState.value = _uiState.value.copy(isSendingContinuously = true)
-        
+
+        // Conectar Socket.IO si no está conectado
+        if (!socketService.isConnected()) {
+            connectSocket()
+        }
+
         // Iniciar tracking de ubicación
         startTracking()
-        
+
         // Iniciar envío periódico
         continuousSendingJob = viewModelScope.launch {
             while (isSendingContinuously) {
@@ -109,7 +177,16 @@ class LocationViewModel(
                             longitude = location.longitude,
                             accuracy = location.accuracy
                         )
-                        sendLocationToBackend(location.latitude, location.longitude, location.accuracy)
+
+                        // Enviar por Socket.IO solo si tenemos userId
+                        currentUserId?.let { uid ->
+                            socketService.sendLocation(
+                                userId = uid,
+                                latitude = location.latitude,
+                                longitude = location.longitude,
+                                accuracy = location.accuracy
+                            )
+                        } ?: Log.w("LocationViewModel", "⚠️ No hay userId disponible, omitiendo envío de ubicación")
                     }
                 } catch (e: Exception) {
                     // Continuar intentando aunque falle una vez
@@ -127,42 +204,7 @@ class LocationViewModel(
         stopTracking()
     }
 
-    private suspend fun sendLocationToBackend(
-        latitude: Double,
-        longitude: Double,
-        accuracy: Float?
-    ) {
-        try {
-            val session = authDataStore.authSessionFlow.firstOrNull()
-            val token = session?.token
-            
-            if (token == null) {
-                _uiState.value = _uiState.value.copy(
-                    errorMessage = "No hay sesión activa. Por favor, inicia sesión nuevamente."
-                )
-                return
-            }
-
-            val result = locationRepository.sendLocation(
-                token = token,
-                userId = userId,
-                latitude = latitude,
-                longitude = longitude,
-                accuracy = accuracy
-            )
-
-            result.onFailure { exception ->
-                _uiState.value = _uiState.value.copy(
-                    errorMessage = "Error al enviar ubicación: ${exception.message}"
-                )
-            }
-        } catch (e: Exception) {
-            _uiState.value = _uiState.value.copy(
-                errorMessage = "Error al enviar ubicación: ${e.message}"
-            )
-        }
-    }
-
+    
     fun reportPermissionError() {
         _uiState.value = _uiState.value.copy(
             errorMessage = "Se requiere el permiso de ubicación para continuar",
@@ -175,7 +217,7 @@ class LocationViewModel(
         if (!hasLocationPermission(context)) {
             return
         }
-        
+
         locationWatchId = locationClient.startLocationUpdates { locationData ->
             _uiState.value = _uiState.value.copy(
                 latitude = locationData.latitude,
@@ -183,19 +225,20 @@ class LocationViewModel(
                 accuracy = locationData.accuracy,
                 isTracking = true
             )
-            
-            // Si está enviando continuamente, enviar al backend
+
+            // Si está enviando continuamente, enviar por Socket.IO solo si tenemos userId
             if (isSendingContinuously) {
-                viewModelScope.launch {
-                    sendLocationToBackend(
-                        locationData.latitude,
-                        locationData.longitude,
-                        locationData.accuracy
+                currentUserId?.let { uid ->
+                    socketService.sendLocation(
+                        userId = uid,
+                        latitude = locationData.latitude,
+                        longitude = locationData.longitude,
+                        accuracy = locationData.accuracy
                     )
-                }
+                } ?: Log.w("LocationViewModel", "⚠️ No hay userId disponible en tracking continuo")
             }
         }
-        
+
         if (locationWatchId != null) {
             _uiState.value = _uiState.value.copy(isTracking = true)
         }

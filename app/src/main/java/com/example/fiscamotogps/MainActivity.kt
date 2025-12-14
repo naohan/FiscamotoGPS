@@ -12,7 +12,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import com.example.fiscamotogps.data.DeviceInfoProvider
+import com.example.fiscamotogps.domain.model.AuthSession
 import com.example.fiscamotogps.data.local.AuthDataStore
 import com.example.fiscamotogps.data.remote.AuthApi
 import com.example.fiscamotogps.data.remote.AuthRepository
@@ -138,19 +144,34 @@ fun FiscamotoGpsApp(
     context: android.content.Context
 ) {
     val authState = authViewModel.uiState.collectAsStateWithLifecycle().value
-    
+
+    // Obtener el userId dinámicamente desde AuthDataStore
+    var authSession by remember { mutableStateOf<AuthSession?>(null) }
+
+    // Observar la sesión para actualizarla
+    LaunchedEffect(Unit) {
+        authDataStore.authSessionFlow.collect { session ->
+            authSession = session
+        }
+    }
+
     val locationViewModel = viewModel<LocationViewModel>(
         factory = LocationViewModel.Factory(
             locationClient = locationClient,
             locationRepository = locationRepository,
             authDataStore = authDataStore,
             context = context,
-            userId = authState.username.ifBlank { authState.userName }
+            userId = authSession?.userId ?: authState.username.ifBlank { authState.userName }
         )
     )
     val locationState = locationViewModel.uiState.collectAsStateWithLifecycle().value
 
     if (authState.isLoggedIn) {
+        // Conectar Socket.IO inmediatamente cuando el usuario está logueado
+        LaunchedEffect(authState.isLoggedIn) {
+            locationViewModel.connectSocket()
+        }
+
         LocationScreen(
             userName = authState.userName.ifBlank { authState.username },
             locationState = locationState,
@@ -158,7 +179,8 @@ fun FiscamotoGpsApp(
             onPermissionDenied = { locationViewModel.reportPermissionError() },
             onStartContinuousSending = { locationViewModel.startContinuousSending() },
             onStopContinuousSending = { locationViewModel.stopContinuousSending() },
-            onLogout = { 
+            onConnectSocket = { locationViewModel.connectSocket() },
+            onLogout = {
                 locationViewModel.disconnectSocket()
                 authViewModel.logout()
             }

@@ -31,13 +31,15 @@ class AuthRepository(
                 val token = extractToken(body)
                     ?: throw IllegalStateException("El servidor no devolvió un token válido")
                 val userName = extractUserName(body) ?: username
+                val userId = extractUserId(body)
                 val rawJson = gson.toJson(body)
 
                 AuthResult(
                     token = token,
                     refreshToken = body.refreshToken ?: body.data?.safeString("refreshToken"),
                     userName = userName,
-                    rawUserData = rawJson
+                    rawUserData = rawJson,
+                    userId = userId
                 )
             } else {
                 val errorBody = response.errorBody()?.string()
@@ -87,6 +89,11 @@ class AuthRepository(
             body.user?.safeString("username")
         )
         return candidates.firstOrNull { !it.isNullOrBlank() }?.trim()
+    }
+
+    private fun extractUserId(body: LoginResponse): String? {
+        // Extraer el ID de data.id según la estructura de la respuesta
+        return body.data?.safeString("id")?.trim()
     }
 
     private fun extractErrorMessage(raw: String): String? {

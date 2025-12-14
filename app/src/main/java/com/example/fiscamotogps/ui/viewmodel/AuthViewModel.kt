@@ -55,7 +55,8 @@ class AuthViewModel(
                     userName = result.userName,
                     rawUserData = result.rawUserData,
                     username = username,
-                    password = password
+                    password = password,
+                    userId = result.userId
                 )
                 authDataStore.saveSession(session)
                 _uiState.update { it.copy(isLoading = false) }

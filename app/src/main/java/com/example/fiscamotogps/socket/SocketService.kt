@@ -10,119 +10,158 @@ import org.json.JSONObject
 import java.net.URISyntaxException
 
 class SocketService(private val serverUrl: String) {
-    
+
     private var socket: Socket? = null
     private val _connectionState = MutableStateFlow<SocketConnectionState>(SocketConnectionState.Disconnected)
     val connectionState: StateFlow<SocketConnectionState> = _connectionState.asStateFlow()
-    
+
     private val _trackingActive = MutableStateFlow(false)
     val trackingActive: StateFlow<Boolean> = _trackingActive.asStateFlow()
-    
+
     private val TAG = "SocketService"
-    
-    fun connect(userId: String) {
+
+    fun connect() {
+        Log.d(TAG, "🔌 [INICIO] connect() llamado sin userId")
+        Log.d(TAG, "📡 [URL] Server URL: $serverUrl")
+        Log.d(TAG, "📡 [URL] Server URL length: ${serverUrl.length}")
+        Log.d(TAG, "📡 [URL] Server URL starts with https: ${serverUrl.startsWith("https")}")
+
         if (socket?.connected() == true) {
-            Log.d(TAG, "Ya está conectado")
+            Log.d(TAG, "✅ Ya está conectado")
             return
         }
-        
+
         try {
-            val options = IO.Options().apply {
+            Log.d(TAG, "📡 [CREANDO] Creando instancia de Socket.IO...")
+            Log.d(TAG, "📡 [URL] URL exacta para Socket.IO: $serverUrl")
+
+            // Configuración robusta de opciones
+            val opts = IO.Options().apply {
+                // Forzar nueva conexión
+                forceNew = true
+
+                // Habilitar reconexión automática
                 reconnection = true
-                reconnectionAttempts = 5
                 reconnectionDelay = 1000
                 reconnectionDelayMax = 5000
-                timeout = 30000 // 30 segundos para conexiones en la nube
-                // Configuración para HTTPS/SSL en dispositivo físico
-                forceNew = false
-                // Intentar websocket primero, luego polling como fallback
+                reconnectionAttempts = Int.MAX_VALUE
+
+                // CRÍTICO: Configurar transportes (websocket + polling como fallback)
+                // Render.com a veces necesita polling primero
                 transports = arrayOf("websocket", "polling")
+
+                // Timeouts
+                timeout = 20000
             }
-            
-            socket = IO.socket(serverUrl, options)
-            
+
+            socket = IO.socket(serverUrl, opts)
+
+            // === EVENTOS DE CONEXIÓN ===
             socket?.on(Socket.EVENT_CONNECT) {
-                Log.d(TAG, "Conectado al servidor")
+                Log.d(TAG, "✅ CONECTADO al servidor Socket.IO exitosamente")
                 _connectionState.value = SocketConnectionState.Connected
                 // Solicitar estado del tracking al conectar
                 socket?.emit("tracking:getStatus")
             }
-            
+
             socket?.on(Socket.EVENT_DISCONNECT) { args ->
-                Log.d(TAG, "Desconectado: ${args?.firstOrNull()}")
+                val reason = args?.firstOrNull()?.toString() ?: "desconocida"
+                Log.w(TAG, "❌ DESCONECTADO del servidor. Razón: $reason")
                 _connectionState.value = SocketConnectionState.Disconnected
             }
-            
+
             socket?.on(Socket.EVENT_CONNECT_ERROR) { args ->
-                Log.e(TAG, "Error de conexión: ${args?.firstOrNull()}")
-                _connectionState.value = SocketConnectionState.Error(
-                    args?.firstOrNull()?.toString() ?: "Error desconocido"
-                )
+                val error = args?.firstOrNull()
+                val errorMsg = when (error) {
+                    is Exception -> error.message ?: "Error desconocido"
+                    else -> error?.toString() ?: "Error desconocido"
+                }
+                Log.e(TAG, "❌ ERROR DE CONEXIÓN Socket.IO: $errorMsg")
+                _connectionState.value = SocketConnectionState.Error(errorMsg)
             }
-            
+
+            // === EVENTOS DE TRACKING ===
             socket?.on("tracking:statusChanged") { args ->
                 val data = args.firstOrNull() as? JSONObject
                 val active = data?.optBoolean("active", false) ?: false
                 _trackingActive.value = active
-                Log.d(TAG, "Tracking status changed: $active")
+                Log.d(TAG, "📊 Tracking status changed: $active")
             }
-            
+
             socket?.on("tracking:status") { args ->
                 val data = args.firstOrNull() as? JSONObject
                 val active = data?.optBoolean("active", false) ?: false
                 _trackingActive.value = active
-                Log.d(TAG, "Tracking status: $active")
+                Log.d(TAG, "📊 Tracking status: $active")
             }
-            
+
             socket?.on("tracking:statusResponse") { args ->
                 val data = args.firstOrNull() as? JSONObject
                 val active = data?.optBoolean("active", false) ?: false
                 _trackingActive.value = active
-                Log.d(TAG, "Tracking status response: $active")
+                Log.d(TAG, "📊 Tracking status response: $active")
             }
-            
+
+            // === EVENTOS DE UBICACIÓN (SIN DUPLICADOS) ===
             socket?.on("location:confirmed") { args ->
                 val data = args.firstOrNull() as? JSONObject
-                Log.d(TAG, "Ubicación confirmada: ${data?.toString()}")
+                Log.d(TAG, "✅ Ubicación confirmada: ${data?.toString()}")
             }
-            
+
             socket?.on("location:error") { args ->
                 val data = args.firstOrNull() as? JSONObject
                 val message = data?.optString("message", "Error desconocido") ?: "Error desconocido"
-                Log.e(TAG, "Error de ubicación: $message")
+                Log.e(TAG, "❌ Error de ubicación del servidor: $message")
             }
-            
+
+            socket?.on("location:realtime") { args ->
+                Log.d(TAG, "📍 Ubicación en tiempo real recibida")
+            }
+
+            socket?.on("location:allLocations") { args ->
+                Log.d(TAG, "📊 Lista de ubicaciones activas recibida")
+            }
+
             socket?.on("welcome") { args ->
                 val data = args.firstOrNull() as? JSONObject
-                Log.d(TAG, "Mensaje de bienvenida: ${data?.toString()}")
+                Log.d(TAG, "👋 Mensaje de bienvenida: ${data?.toString()}")
             }
-            
-            socket?.connect()
+
+            // === EVENTOS GENÉRICOS DE ERROR ===
+            socket?.on("error") { args ->
+                Log.e(TAG, "❌ Error general: ${args.firstOrNull()}")
+            }
+
+            Log.d(TAG, "🚀 Iniciando conexión Socket.IO...")
             _connectionState.value = SocketConnectionState.Connecting
-            
+            socket?.connect()
+
         } catch (e: URISyntaxException) {
-            Log.e(TAG, "Error en la URL del servidor", e)
+            Log.e(TAG, "❌ Error en la URL del servidor", e)
             _connectionState.value = SocketConnectionState.Error("URL inválida: ${e.message}")
         } catch (e: Exception) {
-            Log.e(TAG, "Error al conectar", e)
+            Log.e(TAG, "❌ Error inesperado al conectar", e)
             _connectionState.value = SocketConnectionState.Error(e.message ?: "Error desconocido")
         }
     }
-    
+
     fun disconnect() {
+        Log.d(TAG, "🔌 Desconectando Socket.IO...")
         socket?.disconnect()
         socket?.off()
         socket = null
         _connectionState.value = SocketConnectionState.Disconnected
         _trackingActive.value = false
     }
-    
+
     fun sendLocation(userId: String, latitude: Double, longitude: Double, accuracy: Float?) {
+        Log.d(TAG, "📍 [SEND] Enviando ubicación con userId: $userId")
+
         if (socket?.connected() != true) {
-            Log.w(TAG, "No hay conexión, no se puede enviar ubicación")
+            Log.w(TAG, "⚠️ Socket no conectado, no se puede enviar ubicación")
             return
         }
-        
+
         try {
             val locationData = JSONObject().apply {
                 put("userId", userId)
@@ -131,18 +170,23 @@ class SocketService(private val serverUrl: String) {
                 put("timestamp", System.currentTimeMillis())
                 accuracy?.let { put("accuracy", it) }
             }
-            
+
             socket?.emit("location:update", locationData)
-            Log.d(TAG, "Ubicación enviada: $locationData")
+            Log.d(TAG, "📤 Ubicación enviada: lat=$latitude, lon=$longitude")
         } catch (e: Exception) {
-            Log.e(TAG, "Error al enviar ubicación", e)
+            Log.e(TAG, "❌ Error al enviar ubicación", e)
         }
     }
-    
+
     fun requestTrackingStatus() {
-        socket?.emit("tracking:getStatus")
+        if (socket?.connected() == true) {
+            socket?.emit("tracking:getStatus")
+            Log.d(TAG, "📤 Solicitando estado de tracking...")
+        } else {
+            Log.w(TAG, "⚠️ No conectado, no se puede solicitar estado")
+        }
     }
-    
+
     fun isConnected(): Boolean {
         return socket?.connected() == true
     }
@@ -154,4 +198,3 @@ sealed class SocketConnectionState {
     object Connected : SocketConnectionState()
     data class Error(val message: String) : SocketConnectionState()
 }
-
