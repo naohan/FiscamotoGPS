@@ -27,8 +27,20 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Comentado temporalmente - descomenta cuando tengas un keystore
+            // signingConfig = signingConfigs.getByName("release")
         }
     }
+    
+    // Configuración de signing - descomenta cuando tengas un keystore
+    // signingConfigs {
+    //     create("release") {
+    //         storeFile = file("ruta/a/tu/keystore.jks")
+    //         storePassword = "tu_contraseña"
+    //         keyAlias = "tu_alias"
+    //         keyPassword = "tu_contraseña_key"
+    //     }
+    // }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
@@ -46,6 +58,14 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/DEPENDENCIES"
+            excludes += "/META-INF/LICENSE"
+            excludes += "/META-INF/LICENSE.txt"
+            excludes += "/META-INF/license.txt"
+            excludes += "/META-INF/NOTICE"
+            excludes += "/META-INF/NOTICE.txt"
+            excludes += "/META-INF/notice.txt"
+            excludes += "DebugProbesKt.bin"
         }
     }
 }

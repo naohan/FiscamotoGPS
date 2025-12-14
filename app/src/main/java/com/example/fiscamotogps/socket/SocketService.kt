@@ -29,7 +29,14 @@ class SocketService(private val serverUrl: String) {
         try {
             val options = IO.Options().apply {
                 reconnection = true
-                timeout = 20000
+                reconnectionAttempts = 5
+                reconnectionDelay = 1000
+                reconnectionDelayMax = 5000
+                timeout = 30000 // 30 segundos para conexiones en la nube
+                // Configuración para HTTPS/SSL en dispositivo físico
+                forceNew = false
+                // Intentar websocket primero, luego polling como fallback
+                transports = arrayOf("websocket", "polling")
             }
             
             socket = IO.socket(serverUrl, options)

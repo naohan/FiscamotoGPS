@@ -16,20 +16,25 @@ import com.example.fiscamotogps.data.DeviceInfoProvider
 import com.example.fiscamotogps.data.local.AuthDataStore
 import com.example.fiscamotogps.data.remote.AuthApi
 import com.example.fiscamotogps.data.remote.AuthRepository
+import com.example.fiscamotogps.data.remote.LocationApi
+import com.example.fiscamotogps.data.remote.LocationRepository
 import com.example.fiscamotogps.location.DefaultLocationClient
 import com.example.fiscamotogps.location.LocationClient
 import com.example.fiscamotogps.ui.screens.LocationScreen
 import com.example.fiscamotogps.ui.screens.LoginScreen
 import com.example.fiscamotogps.ui.theme.FiscamotoGPSTheme
-import com.example.fiscamotogps.socket.SocketService
 import com.example.fiscamotogps.ui.viewmodel.AuthViewModel
 import com.example.fiscamotogps.ui.viewmodel.LocationViewModel
 import com.google.android.gms.location.LocationServices
 import com.google.gson.GsonBuilder
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Response
 import okhttp3.logging.HttpLoggingInterceptor
+import java.util.concurrent.TimeUnit
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import android.provider.Settings
 
 class MainActivity : ComponentActivity() {
 
@@ -46,11 +51,6 @@ class MainActivity : ComponentActivity() {
             LocationServices.getFusedLocationProviderClient(this)
         )
     }
-    
-    private val socketService: SocketService by lazy {
-        // Cambiar esta URL por la URL real de tu servidor Socket.IO
-        SocketService("http://localhost:4000")
-    }
 
     private val authViewModel: AuthViewModel by viewModels {
         AuthViewModel.Factory(authRepository, authDataStore)
@@ -65,7 +65,8 @@ class MainActivity : ComponentActivity() {
                     FiscamotoGpsApp(
                         authViewModel = authViewModel,
                         locationClient = locationClient,
-                        socketService = socketService,
+                        locationRepository = LocationRepository(provideLocationApi()),
+                        authDataStore = authDataStore,
                         context = this@MainActivity
                     )
                 }
@@ -73,8 +74,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun provideAuthApi(): AuthApi {
+    private val retrofit: Retrofit by lazy {
         val isDebug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        
+        // Obtener Device ID
+        val deviceId = Settings.Secure.getString(
+            applicationContext.contentResolver,
+            Settings.Secure.ANDROID_ID
+        ) ?: "unknown"
+        
+        // Interceptor para agregar el header X-Device-Id
+        val deviceIdInterceptor = Interceptor { chain ->
+            val originalRequest = chain.request()
+            val newRequest = originalRequest.newBuilder()
+                .header("X-Device-Id", deviceId)
+                .build()
+            chain.proceed(newRequest)
+        }
+        
         val logging = HttpLoggingInterceptor().apply {
             level = if (isDebug) {
                 HttpLoggingInterceptor.Level.BODY
@@ -84,19 +101,31 @@ class MainActivity : ComponentActivity() {
         }
 
         val client = OkHttpClient.Builder()
-            .addInterceptor(logging)
+            .addInterceptor(deviceIdInterceptor) // Agregar device ID primero
+            .addInterceptor(logging) // Luego logging
+            // Configurar timeouts más largos para servidores en la nube (Render)
+            .connectTimeout(60, TimeUnit.SECONDS) // Tiempo para establecer conexión
+            .readTimeout(60, TimeUnit.SECONDS) // Tiempo para leer respuesta
+            .writeTimeout(60, TimeUnit.SECONDS) // Tiempo para escribir request
             .build()
 
         val gson = GsonBuilder()
             .setLenient()
             .create()
 
-        return Retrofit.Builder()
+        Retrofit.Builder()
             .baseUrl("https://backfiscamotov2.onrender.com/api/")
             .client(client)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
-            .create(AuthApi::class.java)
+    }
+
+    private fun provideAuthApi(): AuthApi {
+        return retrofit.create(AuthApi::class.java)
+    }
+
+    private fun provideLocationApi(): LocationApi {
+        return retrofit.create(LocationApi::class.java)
     }
 }
 
@@ -104,17 +133,19 @@ class MainActivity : ComponentActivity() {
 fun FiscamotoGpsApp(
     authViewModel: AuthViewModel,
     locationClient: LocationClient,
-    socketService: SocketService,
+    locationRepository: LocationRepository,
+    authDataStore: AuthDataStore,
     context: android.content.Context
 ) {
     val authState = authViewModel.uiState.collectAsStateWithLifecycle().value
+    
     val locationViewModel = viewModel<LocationViewModel>(
         factory = LocationViewModel.Factory(
             locationClient = locationClient,
-            socketService = socketService,
+            locationRepository = locationRepository,
+            authDataStore = authDataStore,
             context = context,
-            userId = authState.username.ifBlank { authState.userName },
-            serverUrl = "http://localhost:4000" // Cambiar por la URL real
+            userId = authState.username.ifBlank { authState.userName }
         )
     )
     val locationState = locationViewModel.uiState.collectAsStateWithLifecycle().value
@@ -125,8 +156,8 @@ fun FiscamotoGpsApp(
             locationState = locationState,
             onRequestLocation = { locationViewModel.fetchLocation() },
             onPermissionDenied = { locationViewModel.reportPermissionError() },
-            onConnectSocket = { locationViewModel.connectSocket() },
-            onDisconnectSocket = { locationViewModel.disconnectSocket() },
+            onStartContinuousSending = { locationViewModel.startContinuousSending() },
+            onStopContinuousSending = { locationViewModel.stopContinuousSending() },
             onLogout = { 
                 locationViewModel.disconnectSocket()
                 authViewModel.logout()
